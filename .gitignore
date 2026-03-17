@@ -1,0 +1,50 @@
+# --- Deep Learning Artifacts ---
+*.pth
+*.pt
+*.h5
+*.weights
+*.onnx
+*.pb
+*.ckpt
+
+# Ignore all lightning logs or tensorboard runs
+lightning_logs/
+runs/
+wandb/
+*.out
+
+# --- Data & Cache ---
+# Ignore the actual dataset folders (adjust names to your structure)
+data/
+datasets/
+weights/
+# Specifically for your current script
+cache/
+*.json
+# (If you want to keep some JSONs but not the cache, use: cache folders/*.json)
+
+# --- Python Environment ---
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+.venv
+env/
+venv/
+ENV/
+build/
+dist/
+*.egg-info/
+
+# --- Jupyter Notebooks ---
+.ipynb_checkpoints
+*/.ipynb_checkpoints/*
+
+# --- System Files ---
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# --- IDEs ---
+.vscode/
+.idea/
