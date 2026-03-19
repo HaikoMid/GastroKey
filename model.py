@@ -4,7 +4,7 @@ import torch
 
 # Import helper functions from other files
 from dinov3.models.vision_transformer import vit_base
-from dinov2.models.vision_transformer import vit_base_14
+from dinov2.models.vision_transformer import vit_base_14, fix_state_dict_keys
 import torch.nn.functional as F
 
 class Model_CLS(nn.Module):
@@ -25,14 +25,21 @@ class Model_CLS(nn.Module):
                     pos_embed_rope_rescale_coords=2,
                 )
             if opt.weights == 'GastroDINO':
-                state_dict = torch.load('./weights/Gastro231k.pth', weights_only=False)
+                state_dict = torch.load('/home/middeljans/COSMO/pretrained/Gastro231k.pth', weights_only=False)
+                self.backbone.load_state_dict(state_dict, strict=False)
             elif opt.weights == 'DINOv3':
-                state_dict = torch.load('./weights/dinov3_vitb16_pretrain_lvd1689m.pth', weights_only=False)
-            self.backbone.load_state_dict(state_dict, strict=False)
+                state_dict = torch.load('/home/middeljans/COSMO/pretrained/dinov3_vitb16_pretrain_lvd1689m.pth', weights_only=False)
+                self.backbone.load_state_dict(state_dict, strict=False)
 
         elif opt.backbone == 'DINOv2':
             self.backbone = vit_base_14(img_size=opt.imagesize)
+            state_dict = torch.load('/home/middeljans/COSMO/pretrained/dinov2_base.pth', weights_only=True)
+            state_dict = fix_state_dict_keys(state_dict)
+            self.backbone.load_state_dict(state_dict, strict=False)
+
+        self.head = nn.Linear(768, 1)
 
     def forward(self, img):
-        cls = self.backbone(img)
+        cls_token = self.backbone(img)
+        cls = self.head(cls_token)
         return cls

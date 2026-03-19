@@ -79,18 +79,18 @@ def get_data_inclusion_criteria(opt):
             train_folds.remove(val_fold)
 
     criteria['train'] = {'split': ['Training set'],
-                         'fold': train_folds,
+                         'kfold': train_folds,
                          'method': opt.method
                             
                         }
 
     criteria['val'] = {'split': ['Training set'],
-                        'fold': opt.val_fold,
+                        'kfold': opt.val_fold,
                         'method': opt.method
                        }
     
     criteria['test'] = {'split': ['Validatie set'],
-                        #'fold': train_folds,
+                        #'kfold': train_folds,
                        }
 
     return criteria
@@ -224,11 +224,6 @@ class WLEModel_CLS(pl.LightningModule):
         # Define model
         self.model = Model_CLS(opt=opt, inference=False)
 
-        # Define trainable parts of the model
-        if opt.finetune == True:
-            for name, param in self.model.named_parameters():
-                param.requires_grad = ("head" in name)
-
         # Specify metrics
         self.train_auc = torchmetrics.AUROC(task='binary')
         self.val_acc = torchmetrics.Accuracy(task='binary', threshold=0.5)
@@ -239,24 +234,6 @@ class WLEModel_CLS(pl.LightningModule):
         self.test_spec = torchmetrics.Specificity(task='binary', threshold=0.5)
         self.test_sens = torchmetrics.Recall(task='binary', threshold=0.5)
         self.test_auc = torchmetrics.AUROC(task='binary')
-
-        if opt.damper:
-            if opt.imagesize < 336:
-                self.model_pre = WaveDamper(wavelet='bior2.2', level=4, min_severity=0.8, max_severity=1).cuda()
-                checkpoint = torch.load(f'/home/middeljans/COSMO/pretrained/damper_256.ckpt')['state_dict']
-            elif opt.imagesize == 336:
-                self.model_pre = WaveDamper(wavelet='bior2.2', level=4, min_severity=0.8, max_severity=1).cuda()
-                checkpoint = torch.load(f'/home/middeljans/COSMO/pretrained/damper_336.ckpt')['state_dict']
-            elif opt.imagesize > 336:
-                self.model_pre = WaveDamper(wavelet='bior2.2', level=5, min_severity=0.8, max_severity=1).cuda()
-                checkpoint = torch.load(f'/home/middeljans/COSMO/pretrained/damper_512.ckpt')['state_dict']
-            checkpoint_keys = list(checkpoint.keys())
-            for key in checkpoint_keys:
-                checkpoint[key.replace('model.backbone.', '')] = checkpoint[key]
-                del checkpoint[key]
-            self.model_pre.load_state_dict(checkpoint, strict=True)
-            self.model_pre.eval()
-            print('Using damper for augmentation!')
 
     def forward(self, x):
 
@@ -287,18 +264,6 @@ class WLEModel_CLS(pl.LightningModule):
 
         # Extract images, labels
         img, lab = train_batch
-
-        # Damper augmentation
-        if opt.damper:
-            with torch.no_grad():
-                bs = img.size(0)
-                indices_1 = torch.randperm(bs, device=img.device)
-                split1 = indices_1[bs // 2:]
-                damped_x = self.model_pre(img[split1])
-                img[split1] = damped_x
-                if opt.phase:
-                    img = mix_data(img, prob=0.25)
-
         preds = self.forward(img)
 
         # Perform label smoothing
@@ -433,7 +398,7 @@ def run_cls(opt):
     print('Starting PyTorch Lightning Model...')
 
     # Construct Loggers for PyTorch Lightning
-    wandb_logger_train = WandbLogger(name='{}'.format(EXPERIMENT_NAME, opt.seed), project='Scope Study ResNet',
+    wandb_logger_train = WandbLogger(name='{}'.format(EXPERIMENT_NAME, opt.seed), project='GastroKey',
                                      save_dir=os.path.join(SAVE_DIR, EXPERIMENT_NAME), offline=False)
     lr_monitor_train = LearningRateMonitor(logging_interval='step')
     early_stop_callback = EarlyStopping(monitor='val_auc', min_delta=0.0005, patience=5, mode='max', check_on_train_epoch_end=False)
@@ -491,13 +456,14 @@ if __name__ == '__main__':
         os.mkdir(SAVE_DIR)
 
     """SPECIFY CACHE PATH"""
-    CACHE_PATH = r'/home/middeljans/COSMO/cache_seg'
+    CACHE_PATH = r'/home/middeljans/GastroKey/cache'
 
     """SPECIFY PARAMETERS AND INCLUSION CRITERIA"""
 
-    for i in range(1):
+    for i in range(5):
         opt = get_params()
-        EXPERIMENT_NAME = f"{opt.basename}"
+        opt.val_fold = [f + i for f in opt.val_fold]
+        EXPERIMENT_NAME = f"{opt.basename}_{opt.val_fold[0]}"
         opt.experimentname = EXPERIMENT_NAME
 
         # Check if direction for logging the information already exists; otherwise make direction
@@ -514,5 +480,3 @@ if __name__ == '__main__':
 
         """EXECUTE FUNCTION"""
         run_cls(opt=opt)
-        
-        opt.val_fold = [f + 1 for f in opt.val_fold]

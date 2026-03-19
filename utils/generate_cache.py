@@ -285,25 +285,26 @@ def generate_cache(root_dir, storing_folder):
             'scope':  path_parts[-7]
         }
 
-        # Assign Fold
-        for fold_idx in range(splits):
-            if data['patient'] in folds[fold_idx]:
-                data['kfold'] = fold_idx
+        if data['method'] == 'latent_resnet':
+            # Assign Fold
+            for fold_idx in range(splits):
+                if data['patient'] in folds[fold_idx]:
+                    data['kfold'] = fold_idx
 
-        # Image properties & ROI
-        with Image.open(img) as img_obj:
-            data['width'], data['height'] = img_obj.size
-            frame = np.array(img_obj)
-        
-        roi = find_roi(frame)
-        data['roi'] = [float(x) for x in roi]
+            # Image properties & ROI
+            with Image.open(img) as img_obj:
+                data['width'], data['height'] = img_obj.size
+                frame = np.array(img_obj)
+            
+            roi = find_roi(frame)
+            data['roi'] = [float(x) for x in roi]
 
-        # --- KEY CHANGE: STORE INDIVIDUAL JSON ---
-        # Generate a unique path for this specific image's JSON
-        json_file_path = get_available_json_path(img_name_only, cache_dir)
-        
-        with open(json_file_path, 'w') as f:
-            json.dump(data, f, indent=4)
+            # --- KEY CHANGE: STORE INDIVIDUAL JSON ---
+            # Generate a unique path for this specific image's JSON
+            json_file_path = get_available_json_path(img_name_only, cache_dir)
+            
+            with open(json_file_path, 'w') as f:
+                json.dump(data, f, indent=4)
 
     print(f"Finished. Individual cache files saved to {cache_dir}")
 

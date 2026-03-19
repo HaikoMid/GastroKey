@@ -108,26 +108,191 @@ def read_inclusion(path, criteria):
         if v_cache['split'] not in split:
             include = False
 
-        if v_cache['method'] not in method:
+        if method is not None:
+            if v_cache['method'] not in method:
+                include = False
+
+        # Check whether include is true
+        if include:
+            if v_cache['class'] == 'neo':
+                if v_cache['patient'] in patient_neo_list:
+                    info = {'file': v_cache['file'], 'label': np.array([1], dtype=np.float32), 'roi': v_cache['roi'], 'scope': v_cache['scope'], 'type': v_cache['type']}
+                    img_list.append(info)
+            elif v_cache['class'] == 'ndbe':
+                if v_cache['patient'] in patient_ndbe_list:
+                    info = {'file': v_cache['file'], 'label': np.array([0], dtype=np.float32), 'roi': v_cache['roi'], 'scope': v_cache['scope'], 'type': v_cache['type']}
+                    img_list.append(info)
+            else:
+                print(v_cache['file'], v_cache['class'])
+                print('Unrecognized class..')
+                raise ValueError
+    return img_list
+
+def read_inclusion_combi(path, criteria):
+
+    # Initialize lists
+    img_list = list()
+    frame_list = list()
+
+    # Intialize patient id lists
+    patient_neo_list = list()
+    patient_ndbe_list = list()
+
+    # Initialize empty dictionary
+    cache = dict()
+
+    # Loop over cachefiles and check for inclusion criteria
+    cache_files = os.listdir(path)
+    for cachefile in cache_files:
+        with open(os.path.join(path, cachefile)) as json_file:
+            data = json.load(json_file)
+            cache[cachefile] = data
+
+    # Obtain min_height, min_width and mask_only from inclusion criteria
+    min_height = criteria.pop('min_height', None)
+    min_width = criteria.pop('min_width', None)
+    scopes = criteria.get('scope', None)
+    image_type = criteria.pop('type', None)
+    frame_percentage = criteria.pop('frame_percentage', 100)
+    image_percentage = criteria.pop('image_percentage', 100)
+    split = criteria.get('split', None)
+    exclusive_frames = criteria.pop('exclusive_frames', False)
+    seg_frames_only = criteria.pop('seg_frames_only', False)
+    fold = criteria.pop('fold', None)
+    
+    # Loop over keys and values in cache files
+    for k_cache, v_cache in cache.items():
+
+        # By default set include to True
+        include = True
+
+        # Loop over keys and values in criteria
+        for k_ic, v_ic in criteria.items():
+            v_val = v_cache[k_ic]
+            if isinstance(v_val, list):
+                if not any(val in v_ic for val in v_val):
+                    include = False
+                    break
+            else:
+                if v_val not in v_ic:
+                    include = False
+                    break
+
+        if image_type is not None:
+            if v_cache['type'] not in image_type:
+                include = False
+
+        if include:
+            # Add patients to lists
+            if v_cache['class'] == 'neo':
+                if v_cache['patient'] not in patient_neo_list:
+                    patient_neo_list.append(v_cache['patient'])
+            if v_cache['class'] == 'ndbe':
+                if v_cache['patient'] not in patient_ndbe_list:
+                    patient_ndbe_list.append(v_cache['patient'])
+
+    patient_neo_list.sort()
+    np.random.default_rng(seed=11).shuffle(patient_neo_list)
+    # np.random.default_rng(seed=1).shuffle(patient_neo_list)
+    patient_neo_list = patient_neo_list[:int(len(patient_neo_list)*image_percentage/100)]
+    #print(patient_neo_list)
+
+    patient_ndbe_list.sort()
+    #np.random.default_rng(seed=1).shuffle(patient_ndbe_list)
+    np.random.default_rng(seed=11).shuffle(patient_ndbe_list)
+    patient_ndbe_list = patient_ndbe_list[:int(len(patient_ndbe_list)*image_percentage/100)]
+
+    #exclusive frames
+    image_patients = set()
+
+    # Loop over keys and values in cache files
+    for k_cache, v_cache in cache.items():
+
+        # By default set include to True
+        include = True
+
+        for k_ic, v_ic in criteria.items():
+            v_val = v_cache[k_ic]
+            if isinstance(v_val, list):
+                if not any(val in v_ic for val in v_val):
+                    include = False
+                    break
+            else:
+                if v_val not in v_ic:
+                    include = False
+                    break
+        
+        if v_cache['split'] not in split:
             include = False
+
+        # Check whether min_height from inclusion criteria is not None
+        if min_height is not None:
+            if v_cache['height'] < min_height:
+                include = False
+
+        # Check whether min_width from inclusion criteria is not None
+        if min_width is not None:
+            if v_cache['width'] < min_width:
+                include = False
+
+        if scopes is not None:
+            if v_cache['scope'] not in scopes:
+                include = False
+
+        if fold is not None:
+            if v_cache['kfold'] not in fold:
+                include = False
+
+        if image_type is not None:
+            if v_cache['type'] not in image_type:
+                include = False
+
+        if seg_frames_only:
+            if v_cache['type'] == 'frames' and len(v_cache['masks']) == 0 and v_cache['class'] == 'neo':
+                include = False
 
         # Check whether include is true
         if include:
             if v_cache['type'] == 'images':
                 if v_cache['class'] == 'neo':
                     if v_cache['patient'] in patient_neo_list:
-                        info = {'file': v_cache['file'], 'label': np.array([1], dtype=np.float32), 'roi': v_cache['roi'], 'scope': v_cache['scope'], 'type': v_cache['type']}
+                        info = {'file': v_cache['file'], 'label': np.array([1], dtype=np.float32), 'roi': v_cache['roi'], 'mask': v_cache['masks'], 'scope': v_cache['scope'], 'type': v_cache['type']}
                         img_list.append(info)
+                        image_patients.add(v_cache['patient'])
                 elif v_cache['class'] == 'ndbe':
                     if v_cache['patient'] in patient_ndbe_list:
-                        info = {'file': v_cache['file'], 'label': np.array([0], dtype=np.float32), 'roi': v_cache['roi'], 'scope': v_cache['scope'], 'type': v_cache['type']}
+                        info = {'file': v_cache['file'], 'label': np.array([0], dtype=np.float32), 'roi': v_cache['roi'], 'mask': v_cache['masks'], 'scope': v_cache['scope'], 'type': v_cache['type']}
                         img_list.append(info)
+                        image_patients.add(v_cache['patient'])
                 else:
                     print(v_cache['file'], v_cache['class'])
                     print('Unrecognized class..')
                     raise ValueError
-    return img_list
+            else:
+                if v_cache['class'] == 'neo':
+                    info = {'file': v_cache['file'], 'label': np.array([1], dtype=np.float32), 'roi': v_cache['roi'], 'mask': v_cache['masks'], 'scope': v_cache['scope'], 'patient': v_cache['patient'], 'type': v_cache['type']}
+                    frame_list.append(info)
+                elif v_cache['class'] == 'ndbe':
+                    info = {'file': v_cache['file'], 'label': np.array([0], dtype=np.float32), 'roi': v_cache['roi'], 'mask': v_cache['masks'], 'scope': v_cache['scope'], 'patient': v_cache['patient'], 'type': v_cache['type']}
+                    frame_list.append(info)
+                else:
+                    print(v_cache['file'], v_cache['class'])
+                    print('Unrecognized class..')
+                    raise ValueError
+        
+    if exclusive_frames:
+        frame_list = [
+            f for f in frame_list
+            if f['patient'] not in image_patients
+        ]
 
+    if frame_percentage > 0:
+        rng = random.Random(42)
+        frame_list = rng.sample(frame_list, k=int(len(frame_list) * frame_percentage/100))
+    else:
+        frame_list = list()
+
+    return img_list + frame_list
 
 def sample_weights(img_list, balance_classes=False, balance_scopes=False):
     # Default: assign 1.0 to all samples (no weighting)

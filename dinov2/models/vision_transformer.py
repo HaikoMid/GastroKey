@@ -170,9 +170,6 @@ class DinoVisionTransformer(nn.Module):
 
         self.norm = norm_layer(embed_dim)
 
-        # Classifier head
-        self.head = nn.Linear(embed_dim, num_classes) if num_classes > 0 else nn.Identity()
-
         self.mask_token = nn.Parameter(torch.zeros(1, embed_dim))
 
         self.init_weights()
@@ -334,7 +331,7 @@ class DinoVisionTransformer(nn.Module):
         if is_training:
             return ret
         else:
-            return self.head(ret["x_norm_clstoken"])
+            return ret["x_norm_clstoken"]
 
 
 def init_weights_vit_timm(module: nn.Module, name: str = ""):
@@ -389,10 +386,6 @@ def vit_base_14(patch_size=14, img_size=336, num_register_tokens=0, **kwargs):
         num_classes=1,
         **kwargs,
     )
-
-    state_dict = torch.load(os.path.join(os.getcwd(), 'weights', 'dinov2_base.pth'))
-    state_dict = fix_state_dict_keys(state_dict)
-    model.load_state_dict(state_dict, strict=False)
     return model
 
 

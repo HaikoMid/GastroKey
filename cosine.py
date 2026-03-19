@@ -11,6 +11,7 @@ from torchvision.models import resnet50
 from scipy import ndimage
 from skimage.measure import label
 from pathlib import Path
+import random
 
 WLE_MEAN = [0.64041256, 0.36125767, 0.31330117]
 WLE_STD = [0.18983584, 0.15554344, 0.14093774]
@@ -318,40 +319,94 @@ def run_uniform_extraction(video_path, opt):
     cap.release()
     print(f"Uniform mode: Saved {len(indices)} frames to {save_dir}")
 
+def process_video_similarity_analysis(video_path, opt, device, num_anchors=4):
+    # 1. Extraction
+    model_inputs, raw_frames, global_indices, original_fps = extract_frames_from_video(
+        str(video_path), opt.downsample_factor, opt.imagesize
+    )
+    
+    if model_inputs is None: return
+
+    # 2. Quality Filter
+    valid_subset_idx = biq_frames(model_inputs, global_indices, threshold=opt.quality_threshold)
+    if len(valid_subset_idx) == 0: return
+    
+    hq_inputs = model_inputs[valid_subset_idx]
+
+    # 3. Get Embeddings
+    sample_model = SampleModel(backbone=opt.backbone, model_path=opt.backbone_path).to(device)
+    sample_model.eval()
+
+    with torch.no_grad():
+        embeddings = sample_model.get_embeddings(hq_inputs) 
+        
+        # 4. Select Anchor Indices (evenly spaced across the valid frames)
+        T = len(embeddings)
+        anchor_sub_indices = np.linspace(0, T - 1, num=num_anchors, dtype=int)
+        anchor_feats = embeddings[anchor_sub_indices] # [num_anchors, Dim]
+        
+        # 5. Calculate Similarity Matrix: [num_anchors, Total_HQ_Frames]
+        # Since embeddings are normalized, dot product = cosine similarity
+        sim_matrix = torch.mm(anchor_feats, embeddings.t()).cpu().numpy()
+
+    # 6. Output Table
+    print(f"\n{'='*85}")
+    print(f"MULTI-ANCHOR SEMANTIC ANALYSIS: {video_path.name}")
+    print(f"Total High-Quality Frames: {T}")
+    
+    # Header Row
+    header = f"{'Frame #':<8} | {'Global Idx':<10}"
+    for idx in anchor_sub_indices:
+        global_anchor_idx = global_indices[valid_subset_idx[idx]]
+        header += f" | Sim to Fr_{global_anchor_idx:<5}"
+    print(header)
+    print("-" * 85)
+
+    # Data Rows
+    for i in range(T):
+        # Print every 10th frame to keep logs digestible
+        if i % 10 == 0 or i in anchor_sub_indices:
+            global_idx = global_indices[valid_subset_idx[i]]
+            row = f"{i:<8} | {global_idx:<10}"
+            
+            for anchor_idx_in_list in range(num_anchors):
+                sim_val = sim_matrix[anchor_idx_in_list, i]
+                # Highlight with a star if this is the actual anchor frame
+                star = "*" if i == anchor_sub_indices[anchor_idx_in_list] else " "
+                row += f" | {sim_val:.4f}{star}     "
+            print(row)
+            
+            if i in anchor_sub_indices:
+                print("-" * 85) # Visual break at anchors
+
+    print(f"{'='*85}\n")
+
 def main():
     opt = get_params()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    
     root_path = Path(opt.dataset_root)
     
-    # 1. Find all mp4 files recursively
-    all_videos = list(root_path.rglob('*.[mM][pP]4'))
+    # 1. Find all mp4 files in the Training set
+    video_files = [v for v in root_path.rglob('*.[mM][pP]4') if "Training set" in v.parts]
     
-    # 2. Filter for "Training set" only
-    video_files = [v for v in all_videos if "Training set" in v.parts]
-    
-    print(f"Total videos found: {len(all_videos)}")
-    print(f"Videos in 'Training set': {len(video_files)}")
-    
-    if len(video_files) == 0:
-        print("No videos found. Check if 'Training set' is spelled exactly in your path.")
+    if not video_files:
+        print("No videos found in the Training set path.")
         return
+
+    # 2. Pick 5 random videos (or all of them if there are fewer than 5)
+    num_to_sample = min(5, len(video_files))
+    random_videos = random.sample(video_files, num_to_sample)
     
-    for video_path in video_files:
+    print(f"Randomly selected {num_to_sample} videos for similarity analysis.")
+
+    # 3. Loop through and analyze
+    for i, target_video in enumerate(random_videos):
+        print(f"\n[{i+1}/{num_to_sample}] Starting analysis...")
         try:
-            print(f"\n--- Processing: {video_path.name} ---")
-            
-            # --- UNIFORM ONLY OPTIMIZATION ---
-            if opt.uniform_only:
-                # In uniform mode, we don't need ROI, IQA, or Latent models.
-                # We can use a simplified version of extraction.
-                run_uniform_extraction(video_path, opt)
-            else:
-                # Run the full AI-pipeline (ROI + IQA + Latent)
-                process_video(video_path, opt, device)
-                
+            # Using the multi-anchor version we just created
+            process_video_similarity_analysis(target_video, opt, device, num_anchors=4)
         except Exception as e:
-            print(f"Failed to process {video_path.name}: {e}")
+            print(f"Error analyzing {target_video.name}: {e}")
 
 if __name__ == '__main__':
     main()

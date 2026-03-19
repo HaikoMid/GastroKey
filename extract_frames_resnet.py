@@ -75,37 +75,23 @@ class GastroIQA_multihead(torch.nn.Module):
 
         return y_iqa, y_eso, y_cleaning, y
 
-def biq_frames(model_input_tensor, original_indices, threshold=2.0, batch_size=64):
+def biq_frames(model_input_tensor, model, threshold=2.0, batch_size=64):
     """
-    Filters the model_input_tensor based on GastroIQA scores.
+    Optimized: Now accepts a pre-loaded model instead of loading weights every time.
     """
-    device = model_input_tensor.device
-    path_gastro = '/home/middeljans/GastroKey/weights/checkpoint_200ep_teacher_adapted.pth'
-    
-    model = GastroIQA_multihead(path_gastro).to(device)
-    model.eval()
-
-    path_iqa= '/home/middeljans/GastroKey/weights/model_iqa_eso_clean.pt'
-    iqa_weights = torch.load(path_iqa, weights_only=True)
-    model.load_state_dict(iqa_weights, strict=True)
-
     dataloader = DataLoader(model_input_tensor, batch_size=batch_size, shuffle=False)
     iqa_list = []
 
     with torch.no_grad():
         for data in dataloader:
-            y_iqa, _, _, y = model(data)
-            #print(f"Batch IQA Scores: {y_iqa.squeeze().cpu().numpy()}")
+            y_iqa, _, _, _ = model(data)
             iqa_list.append(y_iqa.detach().cpu())
 
     scores = torch.cat(iqa_list, dim=0).squeeze().numpy()
-    
-    # Identify which frames in this batch pass the test
     valid_mask = scores >= threshold
     valid_indices = np.where(valid_mask)[0]
-
-    print(f"Quality Filter: {len(valid_indices)}/{len(scores)} frames passed threshold {threshold}")
     
+    print(f"Quality Filter: {len(valid_indices)}/{len(scores)} frames passed threshold {threshold}")
     return valid_indices
 
 # Define function for minimum pooling the images
@@ -230,38 +216,39 @@ def extract_frames_from_video(video_path, downsample_factor=1, imagesize=256):
 
     return model_input_tensor, raw_frames, global_indices, video_fps
 
-def process_video(video_path, opt, device):
-    # 1. Extraction
-    # Note: Added video_fps return to extract_frames_from_video as discussed previously
+def process_video(video_path, opt, device, iqa_model, sample_model):
+    """
+    Optimized: Accepts pre-loaded models and saves to a flat directory.
+    """
     model_inputs, raw_frames, global_indices, original_fps = extract_frames_from_video(
         str(video_path), opt.downsample_factor, opt.imagesize
     )
     
     if model_inputs is None: return
 
-    # Calculate target N
     duration = (len(raw_frames) * opt.downsample_factor) / original_fps
-    n_target = int(max(1, round(duration * opt.target_fps)))
+    n_target = 10 #int(max(1, round(duration * opt.target_fps)))
     
-    # Create unique output folder for this video
-    video_rel_path = video_path.relative_to(opt.dataset_root).with_suffix('')
-    save_base = Path(opt.keyframe_dir) / video_rel_path
+    # Define the SINGLE flat output directory
+    save_dir = Path(opt.keyframe_dir) / opt.name
+    save_dir.mkdir(parents=True, exist_ok=True)
     
-    # --- LOGIC BRANCH: UNIFORM ONLY ---
-    if opt.uniform_only:
-        print(f"Uniform-Only Mode: Sampling {n_target} frames for {video_path.name}")
-        uni_dir = save_base / 'uniform'
-        uni_dir.mkdir(parents=True, exist_ok=True)
-        
-        indices = np.linspace(0, len(raw_frames) - 1, num=n_target, dtype=int)
-        for i, idx in enumerate(indices):
-            frame_bgr = cv2.cvtColor(raw_frames[idx], cv2.COLOR_RGB2BGR)
-            cv2.imwrite(str(uni_dir / f"uni_{i:02d}_fr{global_indices[idx]:06d}.png"), frame_bgr)
-        return # Skip the rest
+    video_stem = video_path.stem # e.g., 'Patient_01_Video_A'
 
-    # --- FULL PIPELINE (Default) ---
-    # 2. Quality Filter
-    valid_subset_idx = biq_frames(model_inputs, global_indices, threshold=opt.quality_threshold)
+    # 1. Quality Filter (using pre-loaded model)
+    valid_subset_idx = biq_frames(model_inputs, iqa_model, threshold=opt.quality_threshold)
+    
+    # 2. Fallback Logic
+    if len(valid_subset_idx) == 0:
+        fallback_threshold = 1.0
+        print(f"No frames passed {opt.quality_threshold} for {video_path.stem}. Retrying with threshold {fallback_threshold}...")
+        
+        valid_subset_idx = biq_frames(model_inputs, iqa_model, threshold=fallback_threshold)
+        
+        if len(valid_subset_idx) == 0:
+            print(f"Skipping {video_path.name}: Even with fallback, no frames passed quality check.")
+            return
+    
     actual_n = min(n_target, len(valid_subset_idx))
     
     if actual_n == 0:
@@ -270,86 +257,74 @@ def process_video(video_path, opt, device):
 
     # 3. Latent Sampling
     hq_inputs = model_inputs[valid_subset_idx]
-    sample_model = SampleModel(backbone=opt.backbone, model_path=opt.backbone_path).to(device)
-    
     with torch.no_grad():
-        ai_sub_idx, _ = sample_model.select_most_different_frames(hq_inputs, n_frames=actual_n, use_kmeans=opt.use_kmeans, target_dim=opt.target_dim)
+        ai_sub_idx, _ = sample_model.select_most_different_frames(
+            hq_inputs, n_frames=actual_n, use_kmeans=opt.use_kmeans, target_dim=opt.target_dim
+        )
 
-    # 4. Save Latent Only
-    latent_dir = save_base / opt.name
-    latent_dir.mkdir(parents=True, exist_ok=True)
-    
+    # 4. Save to Flat Folder with Unique Filenames
     for i, sub_idx in enumerate(ai_sub_idx):
         idx_in_hq = sub_idx.item()
         orig_idx = global_indices[valid_subset_idx[idx_in_hq]]
         frame_bgr = cv2.cvtColor(raw_frames[valid_subset_idx[idx_in_hq]], cv2.COLOR_RGB2BGR)
-        cv2.imwrite(str(latent_dir / f"kf_{i:02d}_fr{orig_idx:06d}.png"), frame_bgr)
+        
+        # Filename includes video name to prevent overwriting
+        out_name = f"{video_stem}_f{orig_idx:06d}.png"
+        cv2.imwrite(str(save_dir / out_name), frame_bgr)
 
 def run_uniform_extraction(video_path, opt):
     """
-    Fast extraction that skips all AI processing.
+    Flattened version of uniform extraction.
     """
     cap = cv2.VideoCapture(str(video_path))
     fps = cap.get(cv2.CAP_PROP_FPS)
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-    
     if total_frames <= 0: return
-    
-    # Calculate target number of frames
-    duration = total_frames / fps
-    n_target = int(max(1, round(duration * opt.target_fps)))
-    
-    # Create output directory
-    video_rel_path = video_path.relative_to(opt.dataset_root).with_suffix('')
-    save_dir = Path(opt.keyframe_dir) / video_rel_path / 'uniform'
+
+    n_target = int(max(1, round((total_frames / fps) * opt.target_fps)))
+    save_dir = Path(opt.keyframe_dir) / "uniform"
     save_dir.mkdir(parents=True, exist_ok=True)
     
-    # Calculate uniform indices
     indices = np.linspace(0, total_frames - 1, num=n_target, dtype=int)
-    
-    # Extract only what we need
+    video_stem = video_path.stem
+
     for i, target_idx in enumerate(indices):
         cap.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
         ret, frame = cap.read()
         if ret:
-            fname = f"uni_{i:02d}_fr{target_idx:06d}.png"
-            cv2.imwrite(str(save_dir / fname), frame)
-            
+            out_name = f"{video_stem}_uni{i:02d}_fr{target_idx:06d}.png"
+            cv2.imwrite(str(save_dir / out_name), frame)
     cap.release()
-    print(f"Uniform mode: Saved {len(indices)} frames to {save_dir}")
 
 def main():
     opt = get_params()
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     
+    # --- LOAD MODELS ONCE ---
+    print("Loading AI Models into memory...")
+    path_gastro = '/home/middeljans/GastroKey/weights/checkpoint_200ep_teacher_adapted.pth'
+    path_iqa_weights = '/home/middeljans/GastroKey/weights/model_iqa_eso_clean.pt'
+    
+    # IQA Model
+    iqa_model = GastroIQA_multihead(path_gastro).to(device).eval()
+    iqa_model.load_state_dict(torch.load(path_iqa_weights, weights_only=True))
+    
+    # Sampling Model
+    sample_model = SampleModel_multi(model_path=opt.backbone_path).to(device).eval()
+
     root_path = Path(opt.dataset_root)
-    
-    # 1. Find all mp4 files recursively
     all_videos = list(root_path.rglob('*.[mM][pP]4'))
+    video_files = all_videos
     
-    # 2. Filter for "Training set" only
-    video_files = [v for v in all_videos if "Training set" in v.parts]
-    
-    print(f"Total videos found: {len(all_videos)}")
-    print(f"Videos in 'Training set': {len(video_files)}")
-    
-    if len(video_files) == 0:
-        print("No videos found. Check if 'Training set' is spelled exactly in your path.")
-        return
+    print(f"Total videos to process: {len(video_files)}")
     
     for video_path in video_files:
         try:
             print(f"\n--- Processing: {video_path.name} ---")
-            
-            # --- UNIFORM ONLY OPTIMIZATION ---
             if opt.uniform_only:
-                # In uniform mode, we don't need ROI, IQA, or Latent models.
-                # We can use a simplified version of extraction.
                 run_uniform_extraction(video_path, opt)
             else:
-                # Run the full AI-pipeline (ROI + IQA + Latent)
-                process_video(video_path, opt, device)
-                
+                process_video(video_path, opt, device, iqa_model, sample_model)
         except Exception as e:
             print(f"Failed to process {video_path.name}: {e}")
 
