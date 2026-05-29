@@ -8,6 +8,7 @@ from scipy import ndimage
 from PIL import Image
 from numba import jit
 import random
+import argparse
 from collections import Counter
 import shutil
 
@@ -134,7 +135,7 @@ def split_into_folds(lst, n):
 """"""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""""
 
 # Workaround for duplicate JSON filenames
-def get_available_json_path(imgname, storing_folder, max_attempts=10):
+def get_available_json_path(imgname, storing_folder, max_attempts=30):
     base_name = os.path.splitext(imgname)[0]
     for i in range(max_attempts):
         suffix = '' if i == 0 else f'_{i+1}'
@@ -229,7 +230,7 @@ def get_available_json_path(imgname, storing_folder, max_attempts=10):
 #     storing_file = '/home/middeljans/GastroKey/cache_test.json'  
 #     generate_cache(path, storing_file)
 
-def generate_cache(root_dir, storing_folder):
+def generate_cache(root_dir, storing_folder, method, splits=5, seed=6, subsample_percents=None):
     # 1. Setup output directory (created in '../cache folders/storing_folder')
     cache_dir = os.path.join(os.getcwd(), '..', 'cache folders', storing_folder)
     print(f'Generating cache in: {cache_dir}')
@@ -255,15 +256,41 @@ def generate_cache(root_dir, storing_folder):
                 patient_ids.append(pid)
 
     patient_ids = sorted(patient_ids)
-    random.seed(6)
+    random.seed(seed)
     random.shuffle(patient_ids)
-    
-    splits = 5
     folds = split_into_folds(patient_ids, splits)
+
+    # Prepare subsample percentages (defaults to 25% and 5%)
+    if subsample_percents is None:
+        subsample_percents = [0.25, 0.05]
+    # normalize percent values if user passed integers like 25,5
+    subsample_percents = [float(p) / 100.0 if p > 1 else float(p) for p in subsample_percents]
+
+    # Build subsample patient sets and their folds
+    subsample_info = {}
+    for p in subsample_percents:
+        pct = float(p)
+        if len(patient_ids) == 0:
+            sampled = []
+        else:
+            sample_size = max(1, int(len(patient_ids) * pct))
+            rnd = random.Random(seed + int(pct * 100))
+            shuffled = patient_ids.copy()
+            rnd.shuffle(shuffled)
+            sampled = shuffled[:sample_size]
+
+        # For very small samples ensure we don't ask split_into_folds for more folds than patients
+        sub_splits = min(splits, max(1, len(sampled))) if len(sampled) > 0 else 0
+        if sub_splits > 0:
+            folds_sub = split_into_folds(sampled, sub_splits)
+        else:
+            folds_sub = []
+
+        subsample_info[pct] = {'patients_set': set(sampled), 'folds': folds_sub}
 
     # 4. Process each image and SAVE INDIVIDUAL JSON
     for img in img_files:
-        print(f'Processing: {img}')
+        #print(f'Processing: {img}')
         
         path_parts = img.split(os.sep)
         case_folder = path_parts[-3]
@@ -285,7 +312,7 @@ def generate_cache(root_dir, storing_folder):
             'scope':  path_parts[-7]
         }
 
-        if data['method'] == 'latent_resnet':
+        if data['method'] == method:
             # Assign Fold
             for fold_idx in range(splits):
                 if data['patient'] in folds[fold_idx]:
@@ -299,10 +326,27 @@ def generate_cache(root_dir, storing_folder):
             roi = find_roi(frame)
             data['roi'] = [float(x) for x in roi]
 
-            # --- KEY CHANGE: STORE INDIVIDUAL JSON ---
             # Generate a unique path for this specific image's JSON
             json_file_path = get_available_json_path(img_name_only, cache_dir)
-            
+            # Add subsample fold assignments and presence flags
+            for p, info in subsample_info.items():
+                pct_label = int(p * 100)
+                in_key = f'in_sub_{pct_label}'
+                fold_key = f'kfold_sub_{pct_label}'
+
+                if data['patient'] in info['patients_set']:
+                    data[in_key] = True
+                    # find the fold index (if folds were created)
+                    assigned = None
+                    for fi, fset in enumerate(info['folds']):
+                        if data['patient'] in fset:
+                            assigned = fi
+                            break
+                    data[fold_key] = assigned
+                else:
+                    data[in_key] = False
+                    data[fold_key] = None
+
             with open(json_file_path, 'w') as f:
                 json.dump(data, f, indent=4)
 
@@ -312,8 +356,13 @@ def generate_cache(root_dir, storing_folder):
 """EXECUTION OF FUNCTIONS"""
 """"""""""""""""""""""""""
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description='Generate per-image cache JSON files from image dataset')
+    parser.add_argument('root_dir', help='Root directory containing images')
+    parser.add_argument('storing_folder', help='Name (or path) of the folder to store cache files')
+    parser.add_argument('method', help='Name of the method')
+    parser.add_argument('--splits', type=int, default=5, help='Number of patient folds (default: 5)')
+    parser.add_argument('--seed', type=int, default=6, help='Random seed for fold assignment (default: 6)')
 
-    # Define paths to the folders
-    path = '/projects/0/prjs1485/GastroKey'
-    storing_file = '/home/middeljans/GastroKey/cache'  
-    generate_cache(path, storing_file)
+    args = parser.parse_args()
+
+    generate_cache(args.root_dir, args.storing_folder, args.method, splits=args.splits, seed=args.seed)

@@ -10,4 +10,4 @@
 # activate conda environment
 source activate intern
 
-python utils/generate_cache.py
+python utils/generate_cache.py /projects/0/prjs1485/GastroKey /home/middeljans/GastroKey/cache latent_maxvol_quality_ada

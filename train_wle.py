@@ -451,7 +451,7 @@ if __name__ == '__main__':
 
     """SPECIFY PATH FOR SAVING"""
     EXPERIMENT_NAME = 'test'
-    SAVE_DIR = os.path.join(os.getcwd(), 'experiments')
+    SAVE_DIR = r'/projects/0/prjs1485/GastroKey_experiments/experiments'
     if not os.path.exists(SAVE_DIR):
         os.mkdir(SAVE_DIR)
 

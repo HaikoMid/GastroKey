@@ -122,17 +122,3 @@ class GastroIQA_multihead_2(torch.nn.Module):
 
 
         return y_iqa, y_eso, y_cleaning
-
-
-if __name__ == '__main__':
-    path_dino = r'C:\Internship EE\models\BIQA\model_iqa_eso_clean.pt'
-    path_gastro = r'C:\Internship EE\models\GastroNet\checkpoint_200ep_teacher_adapted.pth'
-    model = GastroIQA_multihead(path_gastro)
-    model.load_state_dict(torch.load(path_dino))
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"Number of parameters: {total_params}")
-
-    model = GastroIQA_multihead(path_gastro)
-    model.load_state_dict(torch.load(path_dino))
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"Number of parameters: {total_params}")

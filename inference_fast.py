@@ -25,6 +25,7 @@ from train_wle import check_cuda, find_best_model
 from model import Model_CLS
 import openpyxl  # Add this import for Excel file handling
 from itertools import chain
+from torch.utils.data import Dataset, DataLoader
 
 """"""""""""""""""""""""
 """" HELPER FUNCTIONS """
@@ -50,6 +51,8 @@ def get_params():
     parser.add_argument('--names', nargs='+', help='Base experiment name(s) to evaluate')
     parser.add_argument('--data-types', nargs='+', default=['images', 'frames'], choices=['images', 'frames'],
                         help='Data types to evaluate (will be used as a single group)')
+    parser.add_argument('--batch-size', type=int, default=32, help='Batch size for inference')
+    parser.add_argument('--num-workers', type=int, default=4, help='Number of workers for data loading')
 
     args = parser.parse_args()
 
@@ -72,83 +75,88 @@ def get_data_inclusion_criteria(scope, data_type=['frames', 'images']):
     return criteria
 
 
+class CacheDataset(Dataset):
+    def __init__(self, inclusion, transform):
+        self.inclusion = inclusion
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.inclusion)
+
+    def __getitem__(self, idx):
+        img = self.inclusion[idx]
+        file = img['file']
+        roi = img['roi']
+
+        image = Image.open(file).convert('RGB')
+        image = image.crop((roi[2], roi[0], roi[3], roi[1]))
+
+        image_t = self.transform(image)
+        label = float(bool(img.get('label', False)))
+
+        return image_t, label
+
+
 """"""""""""""""""""""""""""""
 """" FUNCTIONS FOR INFERENCE """
 """"""""""""""""""""""""""""""
 
 
 def run_cls(opt, scope, data_type=['frames', 'images']):
-    # Construct data
+    # Build inclusion list and transforms
     criteria = get_data_inclusion_criteria(scope, data_type)
     val_inclusion = read_inclusion_combi(path=CACHE_PATH, criteria=criteria['test'])
-    print('Found {} images...'.format(len(val_inclusion)))
+    n_images = len(val_inclusion)
+    print(f'Found {n_images} images...')
 
-    # Construct transforms
     data_transforms = augmentations_cls(opt=opt)
+
+    # Dataset + DataLoader for batched loading
+    dataset = CacheDataset(val_inclusion, data_transforms['test'])
+    dataloader = DataLoader(dataset, batch_size=getattr(opt, 'batch_size', 32),
+                            num_workers=getattr(opt, 'num_workers', 4), pin_memory=True)
 
     # Construct Model and load weights
     model = Model_CLS(opt=opt, inference=True)
     best_index = find_best_model(path=os.path.join(SAVE_DIR, EXPERIMENT_NAME))
     checkpoint = torch.load(os.path.join(SAVE_DIR, EXPERIMENT_NAME, best_index), weights_only=True)['state_dict']
 
-    # Adapt state_dict keys (remove model. from the key and save again)
+    # Adapt state_dict keys (remove model. prefix)
     checkpoint_keys = list(checkpoint.keys())
     for key in checkpoint_keys:
         checkpoint[key.replace('model.', '')] = checkpoint[key]
         del checkpoint[key]
     model.load_state_dict(checkpoint, strict=False)
 
-    # Save final model as .pt file
-    #torch.save(model.state_dict(), os.path.join(SAVE_DIR, EXPERIMENT_NAME, 'final_pytorch_model.pt'))
-    # weights = torch.load(os.path.join(SAVE_DIR, EXPERIMENT_NAME, 'final_pytorch_model.pt'), weights_only=True)
-    # model.load_state_dict(weights, strict=True)
-
-    # Initialize metrics
-    pos, neg = 0, 0
-    y_true, y_pred = list(), list()
-
-    # Push model to GPU and set in evaluation mode
+    # Push model to GPU and set evaluation mode
     model.cuda()
     model.eval()
+
+    # cuDNN tuning
+    try:
+        torch.backends.cudnn.benchmark = True
+    except Exception:
+        pass
+
+    # Batched inference (FP32)
+    y_true, y_pred = [], []
+    pos = neg = 0
     with torch.no_grad():
+        for inputs, labels in dataloader:
+            inputs = inputs.cuda(non_blocking=True)
+            labels = labels
 
-        # Loop over the data
-        for img in val_inclusion:
+            # FP32 inference
+            outputs = model(inputs)
+            probs = torch.sigmoid(outputs).view(-1)
 
-            # Extract information from cache
-            file = img['file']
-            img_name = os.path.splitext(os.path.split(file)[1])[0]
-            roi = img['roi']
+            y_pred.extend(probs.cpu().numpy().tolist())
+            y_true.extend([bool(x) for x in labels.tolist()])
 
-            # Construct target
-            label = img['label']
-            if label:
-                target = True
-                y_true.append(target)
-                pos += 1
-            else:
-                target = False
-                y_true.append(target)
-                neg += 1
-
-            # Construct Opening print line
-            #print('\nOpening image: {}'.format(img_name))
-
-            # Open Image
-            image = Image.open(file).convert('RGB')
-
-            # Crop the image to the ROI
-            image = image.crop((roi[2], roi[0], roi[3], roi[1]))
-
-            # Apply transforms to image and mask
-            image_t = data_transforms['test'](image)
-            image_t = image_t.unsqueeze(0).cuda()
-
-            cls_pred = model(image_t)
-            cls_pred = torch.sigmoid(cls_pred).cpu()
-
-            # Append values to list
-            y_pred.append(cls_pred.item())
+            batch_pos = int(sum([1 for v in labels.tolist() if v]))
+            batch_neg = labels.size(0) - batch_pos
+            pos += batch_pos
+            neg += batch_neg
 
     # Compute AUC for classification
     auc = roc_auc_score(y_true, y_pred)

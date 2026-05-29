@@ -362,7 +362,6 @@ def fix_state_dict_keys(state_dict):
         if k.startswith("blocks."):
             parts = k.split(".")
             if parts[1].isdigit():  
-                # checkpoint has blocks.N...
                 new_key = ".".join([parts[0], "0", parts[1]] + parts[2:])
             else:
                 new_key = k

@@ -12,4 +12,4 @@ module load 2023
 module load Anaconda3/2023.07-2
 source activate intern
 
-python inference_wle.py
+python inference_fast.py --names latent_kmeans_nonorm_025 latent_maxvol_n_025 --data-types frames
