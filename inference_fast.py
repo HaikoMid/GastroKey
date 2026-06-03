@@ -227,9 +227,9 @@ if __name__ == '__main__':
     parser.add_argument('--data-types', nargs='+', default=['images'], choices=['images', 'frames'],
                         help='Data types to evaluate (will be used as a single group)')
     parser.add_argument('--exp-name', default='keyframes', help='Experiment name base for outputs')
-    parser.add_argument('--cache-path', default=r'/home/middeljans/COSMO/cache_COSMO_FINAL', help='Path to cache folder')
-    parser.add_argument('--output-path', default=r'/home/middeljans/GastroKey/results', help='Output root path')
-    parser.add_argument('--save-dir', default=r'/projects/0/prjs1485/GastroKey_experiments/experiments', help='Save dir for experiments')
+    parser.add_argument('--cache-path', required=True, help='Path to cache folder')
+    parser.add_argument('--output-path', required=True, help='Output root path')
+    parser.add_argument('--save-dir', required=True, help='Save dir for experiments')
 
     args = parser.parse_args()
 

@@ -14,14 +14,12 @@ wandb/
 *.out
 
 # --- Data & Cache ---
-# Ignore the actual dataset folders (adjust names to your structure)
 data/
 datasets/
-weights/
-# Specifically for your current script
+local_utils/
 cache/
 *.json
-# (If you want to keep some JSONs but not the cache, use: cache folders/*.json)
+*.sh
 
 # --- Python Environment ---
 __pycache__/

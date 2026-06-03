@@ -20,9 +20,9 @@ def get_params():
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
     parser.add_argument('--imagesize', type=int, default=256)
     parser.add_argument('--n_keyframes', type=int, default=None)
-    parser.add_argument('--keyframe_dir', type=str, default='/projects/0/prjs1485/GastroKey')
+    parser.add_argument('--keyframe_dir', type=str, required=True, help="Base directory where extracted keyframes will be saved. The script will create subdirectories based on video paths.")
     parser.add_argument('--keyframe_batch_size', type=int, default=64)
-    parser.add_argument('--dataset_root', type=str, default='/projects/0/prjs1485/1. Datasets Cosmo/Olympus/Training set')
+    parser.add_argument('--dataset_root', type=str, required=True, help="Root directory containing the video files. The script will search recursively for .mp4 files under this directory.")
     parser.add_argument('--downsample_factor', type=int, default=1)
     parser.add_argument('--target_dim', type=int, default=None)
     parser.add_argument('--quality_threshold', type=float, default=None)
@@ -30,7 +30,7 @@ def get_params():
     parser.add_argument('--multi', action='store_true', help="Whether to use multi-layer similarity for frame selection.")
     parser.add_argument('--name', type=str, default='latent')
     parser.add_argument('--backbone', type=str, default='DINOv3')
-    parser.add_argument('--backbone_path', type=str, default='/home/middeljans/COSMO/pretrained/Gastro231k.pth') #/home/middeljans/COSMO/pretrained/dinov3_vitb16_pretrain_lvd1689m.pth
+    parser.add_argument('--backbone_path', type=str, required=True, help="Path to the backbone model weights.")
     parser.add_argument('--target_fps', type=float, default=0.25, help='Number of frames to extract per second of video duration')
     parser.add_argument('--uniform_only', action='store_true', help='If set, only sample uniform frames and skip all AI/Quality processing.')
     parser.add_argument('--method', type=str, default='full', help="Whether to use the full pipeline (ROI + IQA + Latent) or just the multi-layer similarity for frame selection.")
@@ -83,12 +83,12 @@ def biq_frames(model_input_tensor, original_indices, threshold=2.0, batch_size=6
     Filters the model_input_tensor based on GastroIQA scores.
     """
     device = model_input_tensor.device
-    path_gastro = '/home/middeljans/GastroKey/weights/checkpoint_200ep_teacher_adapted.pth'
+    path_gastro = './weights/checkpoint_200ep_teacher_adapted.pth'
     
     model = GastroIQA_multihead(path_gastro).to(device)
     model.eval()
 
-    path_iqa= '/home/middeljans/GastroKey/weights/model_iqa_eso_clean.pt'
+    path_iqa= './weights/model_iqa_eso_clean.pt'
     iqa_weights = torch.load(path_iqa, weights_only=True)
     model.load_state_dict(iqa_weights, strict=True)
 
@@ -98,7 +98,6 @@ def biq_frames(model_input_tensor, original_indices, threshold=2.0, batch_size=6
     with torch.no_grad():
         for data in dataloader:
             y_iqa, _, _, y = model(data)
-            #print(f"Batch IQA Scores: {y_iqa.squeeze().cpu().numpy()}")
             iqa_list.append(y_iqa.detach().cpu())
 
     scores = torch.cat(iqa_list, dim=0).squeeze().numpy()
@@ -110,68 +109,6 @@ def biq_frames(model_input_tensor, original_indices, threshold=2.0, batch_size=6
     print(f"Quality Filter: {len(valid_indices)}/{len(scores)} frames passed threshold {threshold}")
     
     return valid_indices
-
-# def biq_frames_scores(model_input_tensor, batch_size=64):
-#     """
-#     Filters the model_input_tensor based on GastroIQA scores.
-#     """
-#     device = model_input_tensor.device
-#     path_gastro = '/home/middeljans/GastroKey/weights/checkpoint_200ep_teacher_adapted.pth'
-    
-#     model = GastroIQA_multihead(path_gastro).to(device)
-#     model.eval()
-
-#     path_iqa= '/home/middeljans/GastroKey/weights/model_iqa_eso_clean.pt'
-#     iqa_weights = torch.load(path_iqa, weights_only=True)
-#     model.load_state_dict(iqa_weights, strict=True)
-
-#     dataloader = DataLoader(model_input_tensor, batch_size=batch_size, shuffle=False)
-#     iqa_list = []
-
-#     with torch.no_grad():
-#         for data in dataloader:
-#             y_iqa, _, _, y = model(data)
-#             #print(f"Batch IQA Scores: {y_iqa.squeeze().cpu().numpy()}")
-#             iqa_list.append(y_iqa.detach().cpu())
-
-#     # concatenate batch outputs, normalize to [0,1] by dividing by 5, then convert to numpy
-#     scores = torch.cat(iqa_list, dim=0).squeeze().float() / 5.0
-#     scores = scores.cpu().numpy()
-
-#     return scores
-
-def biq_frames_scores(model_input_tensor, batch_size=64):
-    """
-    Filters the model_input_tensor based on GastroIQA scores.
-    Returns scores as a PyTorch tensor (0-1 normalized).
-    """
-    device = model_input_tensor.device
-
-    # Load model
-    path_gastro = '/home/middeljans/GastroKey/weights/checkpoint_200ep_teacher_adapted.pth'
-    model = GastroIQA_multihead(path_gastro).to(device)
-    model.eval()
-
-    # Load IQA weights
-    path_iqa = '/home/middeljans/GastroKey/weights/model_iqa_eso_clean.pt'
-    iqa_weights = torch.load(path_iqa, weights_only=True)
-    model.load_state_dict(iqa_weights, strict=True)
-
-    # Make dataloader
-    dataloader = DataLoader(model_input_tensor, batch_size=batch_size, shuffle=False)
-    iqa_list = []
-
-    with torch.no_grad():
-        for data in dataloader:
-            data = data.to(device)  # ensure batch is on the right device
-            y_iqa, _, _, y = model(data)
-            iqa_list.append(y_iqa.detach())  # keep as tensor on device
-
-    # concatenate and normalize to [0,1]
-    scores = torch.cat(iqa_list, dim=0).squeeze().float() / 5.0
-
-    # keep as tensor on device
-    return scores
 
 # Define function for minimum pooling the images
 def min_pooling(img, g=8):
@@ -239,15 +176,11 @@ def select_uniform_frames(frames, n_frames=5):
     if n_frames >= T:
         return torch.arange(T), frames
 
-    # Calculate indices: e.g., if T=100 and n=5, indices = [0, 25, 50, 75, 99]
-    # np.linspace handles the math perfectly
     indices = np.linspace(0, T - 1, num=n_frames, dtype=int)
     
-    # If input is a list (like raw_frames), we index it with a loop or list comp
     if isinstance(frames, list):
         selected_frames = [frames[i] for i in indices]
     else:
-        # If input is a torch tensor
         selected_frames = frames[indices]
         
     return torch.tensor(indices, dtype=torch.long), selected_frames
@@ -262,7 +195,7 @@ def extract_frames_from_video(video_path, downsample_factor=1, imagesize=256):
     
     raw_frames = [] 
     processed_frames = []
-    global_indices = [] # Track original frame numbers
+    global_indices = []
     idx = 0
     roi_coords = None
     
@@ -279,7 +212,7 @@ def extract_frames_from_video(video_path, downsample_factor=1, imagesize=256):
             if roi_coords is None: roi_coords = find_roi(frame_rgb)
             
             raw_frames.append(frame_rgb)
-            global_indices.append(idx) # Save the EXACT frame number
+            global_indices.append(idx)
             
             rmin, rmax, cmin, cmax = roi_coords
             crop = frame_rgb[rmin:rmax, cmin:cmax]
@@ -303,7 +236,6 @@ def process_video(video_path, opt, device):
     
     if model_inputs is None: return
 
-    # Calculate target N
     duration = (len(raw_frames) * opt.downsample_factor) / original_fps
     
     if opt.n_keyframes is not None:
@@ -311,31 +243,13 @@ def process_video(video_path, opt, device):
     else:
         n_target = int(max(1, round(duration * opt.target_fps)))
     
-    # Create unique output folder for this video
     video_rel_path = video_path.relative_to(opt.dataset_root).with_suffix('')
     save_base = Path(opt.keyframe_dir) / video_rel_path
-    
-    # --- LOGIC BRANCH: UNIFORM ONLY ---
-    if opt.uniform_only:
-        print(f"Uniform-Only Mode: Sampling {n_target} frames for {video_path.name}")
-        uni_dir = save_base / opt.method
-        uni_dir.mkdir(parents=True, exist_ok=True)
-        
-        indices = np.linspace(0, len(raw_frames) - 1, num=n_target, dtype=int)
-        for i, idx in enumerate(indices):
-            frame_bgr = cv2.cvtColor(raw_frames[idx], cv2.COLOR_RGB2BGR)
-            cv2.imwrite(str(uni_dir / f"uni_{i:02d}_fr{global_indices[idx]:06d}.png"), frame_bgr)
-        return # Skip the rest
 
-    # --- FULL PIPELINE (Default) ---
     # 2. Quality Filter
     if opt.quality_threshold is not None:
         valid_subset_idx = biq_frames(model_inputs, global_indices, threshold=opt.quality_threshold)
         actual_n = min(n_target, len(valid_subset_idx))
-        
-        # if len(valid_subset_idx) == 0:
-        #     valid_subset_idx = biq_frames(model_inputs, global_indices, threshold=2)
-        #     actual_n = min(n_target, len(valid_subset_idx))
 
         if actual_n == 0:
             print(f"Skipping {video_path.name}: No frames passed quality threshold.")
@@ -369,6 +283,8 @@ def process_video(video_path, opt, device):
         frame_bgr = cv2.cvtColor(raw_frames[valid_subset_idx[idx_in_hq]], cv2.COLOR_RGB2BGR)
         cv2.imwrite(str(latent_dir / f"kf_{i:02d}_fr{orig_idx:06d}.png"), frame_bgr)
 
+    print(f"Latent mode: Saved {len(ai_sub_idx)} frames to {latent_dir}")
+
 def run_uniform_extraction(video_path, opt):
     """
     Fast extraction that skips all AI processing.
@@ -378,9 +294,6 @@ def run_uniform_extraction(video_path, opt):
     total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
     
     if total_frames <= 0: return
-    
-    # Calculate target number of frames
-    #duration = total_frames / fps
 
     # 1. Extraction
     model_inputs, raw_frames, global_indices, original_fps = extract_frames_from_video(
@@ -404,11 +317,17 @@ def run_uniform_extraction(video_path, opt):
     
     # Extract only what we need
     for i, target_idx in enumerate(indices):
+        print(i, target_idx)
         cap.set(cv2.CAP_PROP_POS_FRAMES, target_idx)
         ret, frame = cap.read()
         if ret:
             fname = f"uni_{i:02d}_fr{target_idx:06d}.png"
             cv2.imwrite(str(save_dir / fname), frame)
+        if not ret:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, target_idx - 1))
+            ret, frame = cap.read()
+            if ret:
+                cv2.imwrite(str(save_dir / f"uni_{i:02d}_fr{target_idx:06d}.png"), frame)
             
     cap.release()
     print(f"Uniform mode: Saved {len(indices)} frames to {save_dir}")
@@ -434,7 +353,6 @@ def main():
         try:
             print(f"\n--- Processing: {video_path.name} ---")
             
-            # --- UNIFORM ONLY OPTIMIZATION ---
             if opt.uniform_only:
                 # In uniform mode, we don't need ROI, IQA, or Latent models.
                 # We can use a simplified version of extraction.

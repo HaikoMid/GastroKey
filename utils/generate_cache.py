@@ -144,92 +144,6 @@ def get_available_json_path(imgname, storing_folder, max_attempts=30):
             return jsonfile
     raise FileExistsError(f"No available JSON filename after {max_attempts} attempts for base name: {base_name}")
 
-# def generate_cache(root_dir, output_json_path):
-#     print('Generating cache...')
-#     os.makedirs(os.path.dirname(output_json_path), exist_ok=True)
-
-#     img_files = []
-#     # 1. Collect image files
-#     for root, dirs, files in os.walk(root_dir):
-#         for name in files:
-#             if os.path.splitext(name.lower())[1] in EXT_IMG:
-#                 img_files.append(os.path.join(root, name))
-#             elif name == 'Thumbs.db':
-#                 os.remove(os.path.join(root, name))
-
-
-#     # 3. Extract unique patient IDs based on the video folder name (e.g., isa_252)
-#     patient_ids = []
-#     for img in img_files:
-#         path_parts = img.split(os.sep)
-#         # The case folder is -3 (e.g., isa_252_wle_...)
-#         case_folder = path_parts[-3]
-#         parts = case_folder.split('_')
-#         if len(parts) >= 2:
-#             patient_id = parts[0] + '_' + parts[1] # e.g., isa_252
-#             if patient_id not in patient_ids:
-#                 patient_ids.append(patient_id)
-
-#     # 4. K-Fold Logic
-#     patient_ids = sorted(patient_ids)
-#     random.seed(6)
-#     random.shuffle(patient_ids)
-#     splits = 5
-#     folds = split_into_folds(patient_ids, splits)
-
-#     all_data = []
-
-#     # 5. Process each image
-#     for img in img_files:
-#         path_parts = img.split(os.sep)
-#         case_folder = path_parts[-3]
-#         parts = case_folder.split('_')
-
-#         data = {}
-#         # Patient ID from the folder name
-#         data['patient'] = '_'.join(parts[:2]) 
-#         data['file'] = img
-#         data['clinic'] = parts[0]
-#         data['video_folder'] = case_folder
-
-#         # Updated Path Mapping based on your example
-#         data['method'] = path_parts[-2]     # e.g., 'method'
-#         data['type']   = path_parts[-4]     # e.g., 'videos'
-#         data['class']  = path_parts[-5]     # e.g., 'neo'
-#         data['split']  = path_parts[-6]     # e.g., 'Training set'
-#         data['scope']  = path_parts[-7]     # e.g., 'Olympus'
-
-#         # Assign Fold
-#         for fold in range(splits):
-#             if data['patient'] in folds[fold]:
-#                 data['kfold'] = fold
-
-#         # Image properties
-#         with Image.open(img) as img_obj:
-#             data['width'], data['height'] = img_obj.size
-#             frame = np.array(img_obj)
-        
-#         roi = find_roi(frame)
-#         data['roi'] = [float(x) for x in roi]
-
-#         all_data.append(data)
-
-#     # 6. Save JSON
-#     with open(output_json_path, 'w') as f:
-#         json.dump(all_data, f, indent=4)
-
-#     print(f"Saved {len(all_data)} entries to {output_json_path}")
-
-# """"""""""""""""""""""""""
-# """EXECUTION OF FUNCTIONS"""
-# """"""""""""""""""""""""""
-# if __name__ == '__main__':
-
-#     # Define paths to the folders
-#     path = '/projects/0/prjs1485/GastroKey'
-#     storing_file = '/home/middeljans/GastroKey/cache_test.json'  
-#     generate_cache(path, storing_file)
-
 def generate_cache(root_dir, storing_folder, method, splits=5, seed=6, subsample_percents=None):
     # 1. Setup output directory (created in '../cache folders/storing_folder')
     cache_dir = os.path.join(os.getcwd(), '..', 'cache folders', storing_folder)
@@ -308,8 +222,8 @@ def generate_cache(root_dir, storing_folder, method, splits=5, seed=6, subsample
             'method': path_parts[-2],
             'type':   path_parts[-4],
             'class':  path_parts[-5],
-            'split':  path_parts[-6],
-            'scope':  path_parts[-7]
+            'split':  "Training set",
+            'scope':  "Olympus"
         }
 
         if data['method'] == method:

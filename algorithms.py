@@ -51,24 +51,20 @@ class SampleModel(pl.LightningModule):
             return layers[-1][1] 
         
     def get_features_multi(self, x):
-        """
-        Extracts and concatenates CLS tokens from early, middle, and late layers.
-        This captures a multi-scale representation of visual difference.
-        """
+        """Return concatenated CLS tokens from several layers for a multi-scale representation."""
         target_layers = [2, 5, 8, 11]
         
         outputs = self.encoder.get_intermediate_layers(
             x, n=target_layers, return_class_token=True
         )
         
-        # 1. Extract the CLS tokens from the selected layers
+        # Extract CLS tokens from the chosen layers
         cls_tokens = [layer_output[1] for layer_output in outputs]
-        
-        # 2. L2-Normalize each layer's token individually. 
-        # This is so that one layer doesn't dominate the distance calculation.
+
+        # L2-normalize each token so no single layer dominates
         normed_tokens = [F.normalize(t, p=2, dim=1) for t in cls_tokens]
-        
-        # 3. Concatenate into a single high-dimensional visual fingerprint
+
+        # Concatenate into a single fused feature vector
         fused_features = torch.cat(normed_tokens, dim=1)
         
         return fused_features 
@@ -123,18 +119,15 @@ class SampleModel(pl.LightningModule):
         return centroids
 
     def select_keyframes_cosine(self, feats, n_frames):
-        """
-        Selects frames based purely on Cosine Similarity (Diversity Maximization).
-        Feats should be normalized before calling this.
-        """
+        """Select frames by cosine similarity (diversity). Input features must be normalized."""
         T = feats.size(0)
         device = feats.device
         
-        # Start with the first frame or a random frame
-        selected_indices = [0] 
-        
-        # We track the maximum similarity of each frame to the currently selected set
-        # Since we want 'most different', we want to pick the frame where this max similarity is LOWEST
+        # Start with the first frame
+        selected_indices = [0]
+
+        # For each candidate, track its max similarity to the selected set;
+        # choose the frame whose max similarity is smallest (most different)
         for _ in range(n_frames - 1):
             selected_feats = feats[selected_indices] # [curr_k, D]
             
@@ -157,7 +150,7 @@ class SampleModel(pl.LightningModule):
         if n_frames >= T:
             return torch.arange(T, device=self.device), frames
 
-        # 1. GPU Feature Extraction
+        # GPU Feature Extraction
         feats_list = []
         for i in range(0, T, batch_size):
             batch = frames[i:i+batch_size].to(self.device)
@@ -170,15 +163,15 @@ class SampleModel(pl.LightningModule):
         
         feats = torch.cat(feats_list, dim=0)
 
-        # 2. PCA Reduction
+        # PCA Reduction
         if target_dim is not None:
             feats = self.reduce_dimensions(feats, n_components=target_dim)
 
-        # 3. Normalize for Cosine Similarity
+        # Normalize for Cosine Similarity
         if not use_kmeans:
             feats = F.normalize(feats, dim=1) 
 
-        # 4. Selection Logic
+        # Selection Logic
         if use_kmeans:
             centroids = self.kmeans_pytorch(feats, k=n_frames)
             dists = torch.cdist(feats, centroids)
@@ -192,178 +185,34 @@ class SampleModel(pl.LightningModule):
 
         indices, _ = torch.sort(indices)
         return indices, frames[indices]
-    
-    # def _rectangular_maxvol(self, Q, k, max_iters=20, eps=1e-6, tol=1e-6):
-    #     """
-    #     Approximate rectangular MaxVol selection on rows of Q (T x q).
-    #     Returns indices of k rows whose submatrix maximizes rect-vol ≈ det(A A^T).
-
-    #     This implementation uses a greedy forward selection followed by
-    #     pairwise swap improvements. It's not the most optimal/fast MaxVol
-    #     implementation, but it's stable and simple to integrate.
-    #     """
-    #     T, q = Q.shape
-
-    #     # If requested k is larger than q, warn and cap k to q to avoid
-    #     # singular Gram matrices (determinant will be zero otherwise).
-    #     if k > q:
-    #         k = q
-
-    #     device = Q.device
-
-    #     # Greedy forward selection: at each step pick the row that maximizes
-    #     # the log-determinant of the Gram matrix of the selected set.
-    #     selected = []
-    #     remaining = list(range(T))
-
-    #     for _ in range(k):
-    #         best_idx = None
-    #         best_ld = -float('inf')
-
-    #         for idx in remaining:
-    #             cand = selected + [idx]
-    #             A = Q[cand]  # [m, q]
-    #             G = A @ A.t()
-    #             # regularize for numerical stability
-    #             G = G + eps * torch.eye(G.shape[0], device=device)
-    #             sign, ld = torch.linalg.slogdet(G)
-    #             if sign <= 0:
-    #                 ld_val = -float('inf')
-    #             else:
-    #                 ld_val = ld.item()
-
-    #             if ld_val > best_ld:
-    #                 best_ld = ld_val
-    #                 best_idx = idx
-
-    #         if best_idx is None:
-    #             break
-
-    #         selected.append(best_idx)
-    #         remaining.remove(best_idx)
-
-    #     # Local pairwise swap improvements
-    #     improved = True
-    #     it = 0
-    #     while improved and it < max_iters:
-    #         improved = False
-    #         it += 1
-
-    #         A_sel = Q[selected]
-    #         G_sel = A_sel @ A_sel.t() + eps * torch.eye(len(selected), device=device)
-    #         sign_sel, ld_sel = torch.linalg.slogdet(G_sel)
-    #         base_ld = ld_sel.item() if sign_sel > 0 else -float('inf')
-
-    #         best_swap = None
-    #         best_ld = base_ld
-
-    #         for i, s_idx in enumerate(selected):
-    #             for c_idx in remaining:
-    #                 cand = list(selected)
-    #                 cand[i] = c_idx
-    #                 A = Q[cand]
-    #                 G = A @ A.t() + eps * torch.eye(len(cand), device=device)
-    #                 sign, ld = torch.linalg.slogdet(G)
-    #                 ld_val = ld.item() if sign > 0 else -float('inf')
-    #                 if ld_val > best_ld + tol:
-    #                     best_ld = ld_val
-    #                     best_swap = (i, s_idx, c_idx)
-
-    #         if best_swap is not None:
-    #             i, s_idx, c_idx = best_swap
-    #             # perform swap
-    #             remaining.remove(c_idx)
-    #             remaining.append(s_idx)
-    #             selected[i] = c_idx
-    #             improved = True
-
-    #     return torch.tensor(sorted(selected), device=device, dtype=torch.long)
-
-    # def select_most_informative_maxvol(self, frames, n_frames=5, batch_size=64,
-    #                                    use_pca=True, target_dim=None, max_iters=20, adaptive=True):
-    #     """
-    #     Selects the most informative frames using a rectangular MaxVol-style
-    #     selection on the feature matrix Q (rows = frames, cols = features).
-
-    #     - Extracts features for all frames (GPU batched)
-    #     - Optionally reduces dimensionality via PCA (recommended when
-    #       features_dim > n_frames)
-    #     - Runs an approximate MaxVol selection to pick `n_frames` rows
-    #       whose submatrix maximizes rect-vol (det(A A^T)).
-
-    #     Returns (indices, frames[indices]).
-    #     """
-    #     T = frames.size(0)
-    #     if n_frames >= T:
-    #         return torch.arange(T, device=frames.device), frames
-
-    #     # 1. Extract features
-    #     feats_list = []
-    #     self.encoder.to(frames.device)
-    #     for i in range(0, T, batch_size):
-    #         batch = frames[i:i+batch_size].to(self.device)
-    #         with torch.no_grad():
-    #             f = self.get_features(batch)
-    #         # if model returns batch x D, append per-row
-    #         if f.dim() == 1:
-    #             f = f.unsqueeze(0)
-    #         feats_list.append(f.cpu())
-
-    #     feats = torch.cat(feats_list, dim=0).to(frames.device)
-
-    #     # 2. Optional PCA reduction to ensure enough columns (q) for maxvol
-    #     if target_dim is not None:
-    #         if adaptive:
-    #             feats = self.reduce_dimensions(feats, n_components=n_frames)
-    #         else:
-    #             feats = self.reduce_dimensions(feats, n_components=target_dim)
-
-    #     # If number of columns < n_frames, we cannot get a full-rank Gram matrix.
-    #     # Cap n_frames to number of columns.
-    #     if n_frames > feats.shape[1]:
-    #         n_frames = feats.shape[1]
-
-    #     # Normalize to stabilize numeric range
-    #     feats = F.normalize(feats, dim=1)
-
-    #     # 3. Run MaxVol helper
-    #     indices = self._rectangular_maxvol(feats, n_frames, max_iters=max_iters)
-
-    #     return indices, frames[indices]
 
     def _pytorch_rectangular_maxvol(self, Q, k, eps=1e-6):
-        """
-        Pure PyTorch implementation of Greedy Rectangular MaxVol.
-        Uses vectorized batching for speed.
-        """
+        """Greedy rectangular MaxVol implemented in PyTorch."""
         T, q = Q.shape
         device = Q.device
-        # Safety: Cannot select more frames than available rows or columns
+        # Limit k to available rows/cols
         k = min(k, q, T)
-        
-        # 1. Start with the row of largest norm as the first pivot
+
+        # Pick the row with largest norm as first pivot
         norms = torch.norm(Q, dim=1)
         selected_idx = [torch.argmax(norms).item()]
         remaining_mask = torch.ones(T, dtype=torch.bool, device=device)
         remaining_mask[selected_idx[0]] = False
 
-        # 2. Iteratively add rows
+        # Iteratively add rows that maximize the residual to the current subspace
         for _ in range(1, k):
-            # Current selection submatrix
             A_sel = Q[selected_idx]
-            
-            # Use SVD to find the basis of the currently selected subspace
-            # This is more stable than slogdet for greedy selection
+
+            # SVD to get a stable basis for projections
             U, S, V = torch.linalg.svd(A_sel, full_matrices=False)
-            
-            # Project all rows onto the current basis
-            # V.t() are the principal components
+
+            # Project rows onto the basis and compute residual norms
             projection = (Q @ V.t()) @ V
             residuals = torch.norm(Q - projection, dim=1)
-            
-            # Mask out already selected rows by setting residual to -1
+
+            # Ignore already selected rows
             residuals[~remaining_mask] = -1.0
-            
+
             best_idx = torch.argmax(residuals).item()
             selected_idx.append(best_idx)
             remaining_mask[best_idx] = False
@@ -379,7 +228,7 @@ class SampleModel(pl.LightningModule):
         if n_frames >= T:
             return torch.arange(T, device=frames.device), frames
 
-        # 1. Extract features
+        # Extract features
         feats_list = []
         self.encoder.to(frames.device)
         
@@ -399,8 +248,7 @@ class SampleModel(pl.LightningModule):
 
         feats = torch.cat(feats_list, dim=0)
 
-        # 2. Dimensionality Reduction (SVD/PCA)
-        # Only run if we have enough samples to satisfy the target dimension
+        # Dimensionality Reduction (SVD/PCA)
         if target_dim is not None or adaptive:
             dim = n_frames if adaptive else target_dim
             # PCA requires at least 'dim' rows and columns
@@ -415,8 +263,7 @@ class SampleModel(pl.LightningModule):
         # Normalize features for MaxVol stability
         feats = F.normalize(feats, dim=1)
 
-        # 3. Run MaxVol helper
-        # We call self._pytorch_rectangular_maxvol because it's a class method
+        # Run MaxVol
         indices = self._pytorch_rectangular_maxvol(feats, n_frames)
 
         # Sort indices to maintain temporal order
