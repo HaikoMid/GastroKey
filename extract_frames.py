@@ -27,13 +27,13 @@ def get_params():
     parser.add_argument('--target_dim', type=int, default=None)
     parser.add_argument('--quality_threshold', type=float, default=None)
     parser.add_argument('--use_kmeans', action='store_true', help="Whether to use KMeans for frame selection instead of pure cosine similarity.")
-    parser.add_argument('--multi', action='store_true', help="Whether to use multi-layer similarity for frame selection.")
+    parser.add_argument('--multi', action='store_true', help="Whether to use multi-layer cosine similarity for frame selection.")
     parser.add_argument('--name', type=str, default='latent')
     parser.add_argument('--backbone', type=str, default='DINOv3')
-    parser.add_argument('--backbone_path', type=str, required=True, help="Path to the backbone model weights.")
+    parser.add_argument('--backbone_path', type=str, help="Path to the backbone model weights.")
     parser.add_argument('--target_fps', type=float, default=0.25, help='Number of frames to extract per second of video duration')
     parser.add_argument('--uniform_only', action='store_true', help='If set, only sample uniform frames and skip all AI/Quality processing.')
-    parser.add_argument('--method', type=str, default='full', help="Whether to use the full pipeline (ROI + IQA + Latent) or just the multi-layer similarity for frame selection.")
+    parser.add_argument('--method', type=str, default='cosine', help="Whether to use the full pipeline (ROI + IQA + Latent) or just the multi-layer similarity for frame selection.")
     return parser.parse_args()
 
 class GastroIQA_multihead(torch.nn.Module):

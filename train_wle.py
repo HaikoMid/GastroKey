@@ -450,7 +450,6 @@ def run_cls(opt):
 if __name__ == '__main__':
 
     """SPECIFY PATH FOR SAVING"""
-    EXPERIMENT_NAME = 'test'
     SAVE_DIR = r'./GastroKey/cache'
     if not os.path.exists(SAVE_DIR):
         os.mkdir(SAVE_DIR)
